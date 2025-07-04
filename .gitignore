@@ -3,6 +3,14 @@
 
 # Sensitive environment files
 .env
+secrets/
+
+# Ignore FAISS index files and related metadata
+faiss_index/
+dfl_faiss_index/
+faiss_version.txt
+dfl_version.txt
+scheme_db_latest.xlsx
 
 # Python virtual environment
 myenv/
@@ -16,3 +24,7 @@ __pycache__/
 *.swo
 .vscode/
 .idea/
+
+
+
+

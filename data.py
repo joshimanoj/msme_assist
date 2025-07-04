@@ -115,9 +115,10 @@ class DataManager:
         logger.info(f"Using database {db_name}")
         self.update_existing_users_language()
 
-    def register_user(self, fname, lname, mobile_number, state, business_name, business_category, language):
+    def register_user(self, fname, lname, mobile_number, state, business_name, business_category, language,
+                      gender):
         """Register a new user and return success status with message."""
-        if not all([fname, lname, mobile_number, state, business_name, business_category, language]):
+        if not all([fname, lname, mobile_number, state, business_name, business_category, language, gender]):
             logger.error("All registration fields must be non-empty")
             return False, "All fields are required."
         if not isinstance(mobile_number, str) or not mobile_number.isdigit():
@@ -129,6 +130,9 @@ class DataManager:
         if language not in ["English", "Hindi"]:
             logger.error(f"Invalid language: {language}")
             return False, "Invalid language selected."
+        if gender not in ["Male", "Female", "Other"]:
+            logger.error(f"Invalid gender: {gender}")
+            return False, "Invalid gender selected."
 
         try:
             existing_user = self.db.users.find_one({"mobile_number": mobile_number})
@@ -151,6 +155,7 @@ class DataManager:
                 "business_name": business_name,
                 "business_category": business_category,
                 "language": language,
+                "gender": gender,
                 "created_at": datetime.utcnow()
             }
             self.db.users.insert_one(user_data)
@@ -182,6 +187,59 @@ class DataManager:
         except Exception as e:
             logger.error(f"Unexpected error while finding user with mobile {mobile_number}: {str(e)}")
             return None
+        
+    def update_user_profile(self, mobile_number, **fields):
+        """Update user profile fields for the given mobile number."""
+        if not isinstance(mobile_number, str) or not mobile_number.isdigit():
+            logger.error(f"Invalid mobile_number: {mobile_number} must be a string of digits")
+            return False, "Invalid mobile number."
+
+        allowed_fields = {
+            "fname", "lname", "business_name", "business_category", "language",
+            "gender", "state"
+        }
+
+        update_data = {}
+        for key, value in fields.items():
+            if key not in allowed_fields:
+                logger.warning(f"Ignoring invalid field for update: {key}")
+                continue
+            if key == "language" and value not in ["English", "Hindi"]:
+                logger.error(f"Invalid language: {value}")
+                return False, "Invalid language selected."
+            if key == "gender" and value not in ["Male", "Female", "Other"]:
+                logger.error(f"Invalid gender: {value}")
+                return False, "Invalid gender selected."
+            if key == "state":
+                if value not in STATE_MAPPING.values():
+                    logger.error(f"Invalid state: {value}")
+                    return False, "Invalid state selected."
+                update_data["state_name"] = value
+                for k, v in STATE_MAPPING.items():
+                    if v == value:
+                        update_data["state_id"] = k
+                        break
+            else:
+                update_data[key] = value
+
+        if not update_data:
+            logger.warning("No valid fields provided for update")
+            return False, "No valid fields to update."
+
+        try:
+            result = self.db.users.update_one({"mobile_number": mobile_number}, {"$set": update_data})
+            if result.matched_count == 0:
+                logger.warning(f"No user found with mobile {mobile_number} to update")
+                return False, "User not found."
+            logger.info(f"Updated user {mobile_number} with fields {list(update_data.keys())}")
+            return True, "Profile updated successfully."
+        except OperationFailure as e:
+            logger.error(f"Operation failed while updating user with mobile {mobile_number}: {str(e)}")
+            return False, f"Error updating profile: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error while updating user with mobile {mobile_number}: {str(e)}")
+            return False, f"Error updating profile: {str(e)}"
+
 
     def start_session(self, mobile_number, session_id, user_data=None):
         """Log session start, optionally storing user_data."""
@@ -270,14 +328,26 @@ class DataManager:
             logger.error(f"Unexpected error while saving conversation for session {session_id}: {str(e)}")
             raise
 
-    def get_conversations(self, mobile_number):
-        """Retrieve all conversations for a user, sorted by timestamp."""
+    def get_conversations(self, mobile_number, limit=None):
+        """Retrieve conversations for a user sorted by most recent first.
+
+        Parameters
+        ----------
+        mobile_number : str
+            The mobile number of the user.
+        limit : int, optional
+            Maximum number of conversations to return. If ``None`` all
+            conversations are returned.
+        """
         if not mobile_number or not isinstance(mobile_number, str):
             logger.error("Invalid mobile_number: mobile_number must be a non-empty string")
             raise ValueError("mobile_number must be a non-empty string")
 
         try:
-            conversations = list(self.db.conversations.find({"mobile_number": mobile_number}).sort("timestamp", 1))
+            cursor = self.db.conversations.find({"mobile_number": mobile_number}).sort("timestamp", -1)
+            if isinstance(limit, int) and limit > 0:
+                cursor = cursor.limit(limit)
+            conversations = list(cursor)
             if not conversations:
                 logger.warning(f"No conversations found for mobile_number {mobile_number}")
             else:
